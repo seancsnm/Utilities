@@ -34,7 +34,7 @@ extern "C" {
 
 //#define BBBIO_GPIO0_MODULE	(BBBIO_GPIO_MODULE << 8 | BBBIO_GPIO_0)
 
-//#define BBBIO_LIB_DBG
+#define BBBIO_LIB_DBG
 #define BBBIO_DIR_IN 0
 #define BBBIO_DIR_OUT 1
 

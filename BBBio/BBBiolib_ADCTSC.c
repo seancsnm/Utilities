@@ -267,9 +267,9 @@ int BBBIO_ADCTSC_channel_buffering(unsigned int chn_ID, unsigned int *buf,
  *
  *	@param chn_ID : channel ID which need configure. (BBBIO_AIN0 ~ BBBIO_AIN6)
  *	@param mode : sample mode ,one-shot or continus. (SW mode only , HW synchronized not implement)
- *	@param sample_avg : Number of samplings to average. (BBBIO_ADC_STEP_AVG BBBIO_ADC_STEP_AVG_1, 2, 4, 8, 16)
  *	@param open_dly : open delay ,default :0 , max :262143 .
  *	@param sample_dly : sample delat , default :1 , max :255 .
+ *	@ param sample_avg : Number of samplings to average. (BBBIO_ADC_STEP_AVG BBBIO_ADC_STEP_AVG_1, 2, 4, 8, 16)
  *	@param buf : buffer for store data.
  *	@param buf_size : buffer size.
  *
@@ -418,6 +418,7 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 			return 0;
 		}
 		while (ADCTSC.channel_en_var != 0) {
+			//printf("waiting1\n");
 			usleep(10000);
 		}
 		ADC_t.it_interval.tv_usec = 0;
@@ -429,6 +430,7 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 	} else { /* Busy Polling mode */
 		/* waiting FIFO buffer fetch a data */
 		while (ADCTSC.channel_en_var != 0) {
+			//printf("waiting2\n");
 			reg_count = FIFO_ptr->reg_count;
 			reg_data = FIFO_ptr->reg_data;
 
@@ -460,6 +462,7 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 
 	/* all sample finish */
 	for (chn_ID = 0; chn_ID < ADCTSC_AIN_COUNT; chn_ID++) {
+		//printf("waiting3\n");
 		if (ADCTSC.channel_en & (1 << chn_ID)) {
 			BBBIO_ADCTSC_channel_disable(chn_ID);
 		}

@@ -3,7 +3,7 @@ INSTALL=/usr/local
 STRUCT=Data_Structures/
 
 CC=clang
-CFLAGS=-g -Wall -std=gnu11
+CFLAGS=-g -Wall
 OFLAGS=-c -fPIC -I$(STRUCT)
 
 IO_SRC=$(wildcard BBBio/*.c) 
@@ -60,6 +60,7 @@ data_logger: Logger/data_logger.c Logger/data_logger.h
 clean:
 	rm -rf *.so
 	rm -rf *.o
+	rm -rf ./BBBio/*.o
 
 # Will install everything
 install: install-data install-BBBio install-config install-logger install-data_logger

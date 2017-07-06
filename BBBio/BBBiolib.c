@@ -84,7 +84,6 @@ unsigned int* PortIDSet_ptr[2];
  */
 int iolib_init(void) {
 	int i;
-
 	if (memh) {
 #ifdef BBBIO_LIB_DBG
 		printf("iolib_init: memory already mapped?\n");
