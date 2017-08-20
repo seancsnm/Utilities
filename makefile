@@ -1,3 +1,9 @@
+# Notes: several linker library files are generated (eg libdata.so) that must
+# be installed in the INSTALL directory before the final make can be executed.
+# Therefore, suggested order of commands for first time builds is:
+# 1-- make install
+# 2-- make
+
 INSTALL=/usr/local
 
 STRUCT=Data_Structures/

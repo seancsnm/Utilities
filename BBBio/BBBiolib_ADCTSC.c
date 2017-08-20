@@ -3,6 +3,8 @@
  *
  * support "Single Channel Single Step" ADC sample control  ,  not support Interrupt yet ,
  *
+ * Suggested reading is elinux.org/images/6/65/Spruh73c.pdf#page=1481&zoom=auto,0,650.3
+ *
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +41,7 @@
 #define ADCTSC_IRQWAKEUP	0x34
 #define ADCTSC_DMAENABLE_SET	0x38
 #define ADCTSC_DMAENABLE_CLR	0x3C
-#define ADCTSC_CTRL	0x40
+#define ADCTSC_CTRL	0x40 // pretty sure this sets the bit to store the channel ID tag with the data in the FIFO buffers
 #define ADCTSC_ADCSTAT	0x44
 #define ADCTSC_ADCRANGE	0x48
 #define ADCTSC_ADC_CLKDIV	0x4C
@@ -267,9 +269,9 @@ int BBBIO_ADCTSC_channel_buffering(unsigned int chn_ID, unsigned int *buf,
  *
  *	@param chn_ID : channel ID which need configure. (BBBIO_AIN0 ~ BBBIO_AIN6)
  *	@param mode : sample mode ,one-shot or continus. (SW mode only , HW synchronized not implement)
- *	@param open_dly : open delay ,default :0 , max :262143 .
- *	@param sample_dly : sample delat , default :1 , max :255 .
- *	@ param sample_avg : Number of samplings to average. (BBBIO_ADC_STEP_AVG BBBIO_ADC_STEP_AVG_1, 2, 4, 8, 16)
+ *	@param open_dly : open delay ADC clock cycles between hardware starts and sample delay, default :0, max :262143.
+ *	@param sample_dly : sample delay ADC clock cycles between end of open delay and beggining of ADC reads, and between sampled reads, default :1, max :255.
+ *	@ param sample_avg : Number of samplings to average. The indicated number of samples are taken immediately and averaged before cycling to the next input. (BBBIO_ADC_STEP_AVG BBBIO_ADC_STEP_AVG_1, 2, 4, 8, 16)
  *	@param buf : buffer for store data.
  *	@param buf_size : buffer size.
  *
@@ -437,6 +439,9 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 			FIFO_count = *reg_count;
 			if (FIFO_count > 0) {
 				/* fetch data from FIFO */
+				/* The FIFO buffers will have up to 64 words in them.
+				 * I think we read all of them to reset the state so the next time the work
+				 * method is called we can get fresh values. */
 				for (i = 0; i < FIFO_count; i++) {
 					buf_data = *reg_data;
 					chn_ID = (buf_data >> 16) & 0xF;
