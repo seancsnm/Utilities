@@ -142,6 +142,23 @@ extern int memh;
 extern volatile unsigned int *cm_wkup_addr;
 volatile unsigned int *adctsc_ptr = NULL;
 
+/* ----------------------------------------------------------------------------------------------- */
+/* Convenience functions */
+
+/** 
+ * Essentially just a map to the enumeration BBBIO_ADC_AIN0 - BBBIO_ADC_AIN6 values.
+ *
+ * @param index ADC input index (0-6)
+ */
+int ADCTSC_getAIN(int index)
+{
+	if (index < 0 || index > 6)
+	{
+		return -1;
+	}
+	return BBBIO_ADC_AIN0 + index;
+}
+
 struct ADCTSC_struct ADCTSC;
 /* ----------------------------------------------------------------------------------------------- */
 /* ADCTSC set range
