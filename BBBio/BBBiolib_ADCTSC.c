@@ -3,8 +3,8 @@
  *
  * support "Single Channel Single Step" ADC sample control  ,  not support Interrupt yet ,
  *
- * Suggested reading is elinux.org/images/6/65/Spruh73c.pdf#page=1481&zoom=auto,0,650.3
- *
+ * Suggested reading is http://www.ti.com/lit/ug/spruh73p/spruh73p.pdf
+ * (that link goes to the AM335x ARM Cortex-A8 Microprocessors Technical Reference Manual, chapter 12)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,7 +41,7 @@
 #define ADCTSC_IRQWAKEUP	0x34
 #define ADCTSC_DMAENABLE_SET	0x38
 #define ADCTSC_DMAENABLE_CLR	0x3C
-#define ADCTSC_CTRL	0x40 // pretty sure this sets the bit to store the channel ID tag with the data in the FIFO buffers
+#define ADCTSC_CTRL	0x40
 #define ADCTSC_ADCSTAT	0x44
 #define ADCTSC_ADCRANGE	0x48
 #define ADCTSC_ADC_CLKDIV	0x4C
@@ -97,7 +97,7 @@
 
 /* CTRL operator code */
 #define CTRL_ENABLE	0x1
-#define CTRL_STEP_ID_TAG	0x2
+#define CTRL_STEP_ID_TAG	0x2 // pretty sure this sets the bit to store the channel ID tag with the data in the FIFO buffers
 
 /* ----------------------------------------------------------------------------------------------- */
 /* struct definition */
@@ -408,7 +408,7 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 	int i;
 //	unsigned int tmp_channel_en = ADCTSC.channel_en;
 
-	/* Start sample */
+	/* 1. Start sampling. This enables the channels; the ADC unit should start "immediately" afterwards. */
 	for (chn_ID = 0; chn_ID < ADCTSC_AIN_COUNT; chn_ID++) {
 		if (ADCTSC.channel_en & (1 << chn_ID)) {
 			ADCTSC.channel[chn_ID].buffer_save_ptr =
@@ -417,14 +417,22 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 		}
 	}
 
-	/* Enable module and tag channel ID in FIFO data*/
+	/* 2. Enable module and tag channel ID in FIFO data*/
 	reg_ctrl = (void *) adctsc_ptr + ADCTSC_CTRL;
 	*reg_ctrl |= (CTRL_ENABLE | CTRL_STEP_ID_TAG);
 
 	ADCTSC.fetch_size = fetch_size;
 	ADCTSC.channel_en_var = ADCTSC.channel_en;
 
-	if (ADCTSC.work_mode & BBBIO_ADC_WORK_MODE_TIMER_INT) {
+	/* 3. Retrieve values from the ADC! */
+	if (ADCTSC.work_mode & BBBIO_ADC_WORK_MODE_TIMER_INT) { /* Timed Wait mode */
+		/* 3a)
+		 * Wait some amount of time (currently 200 microseconds)
+		 * before looking for values from the ADC in the _ADCTSC_work function.
+		 * If all desired values aren't available by that time,
+		 * delay another 10,000 microseconds and try again.    
+		 */
+
 		struct itimerval ADC_t;
 		ADC_t.it_interval.tv_usec = 200;
 		ADC_t.it_interval.tv_sec = 0;
@@ -447,42 +455,53 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 		setitimer(ITIMER_REAL, &ADC_t, NULL);
 		signal(SIGALRM, NULL);
 	} else { /* Busy Polling mode */
+		/* 3a)
+		 * Busy wait on the ADC to finish converting all enabled inputs.
+		 * While not all inputs have been sampled, read either of the FIFO buffers
+		 * for all values in the buffers.
+		 * We know which channel has been sampled because we set the CTRL_STEP_ID_TAG
+		 * bit, which store the channel label in the FIFO buffers along with the data.
+		 */
+
 		/* waiting FIFO buffer fetch a data */
 		while (ADCTSC.channel_en_var != 0) {
 			//printf("waiting2\n");
 			reg_count = FIFO_ptr->reg_count;
 			reg_data = FIFO_ptr->reg_data;
 
+			// Get the count of available words in the ADC FIFO buffer (up to 64).
+			// I think this will be reset when we turn all channels off in step 4.
 			FIFO_count = *reg_count;
-			if (FIFO_count > 0) {
-				/* fetch data from FIFO */
-				/* The FIFO buffers will have up to 64 words in them.
-				 * I think we read all of them to reset the state so the next time the work
-				 * method is called we can get fresh values. */
-				for (i = 0; i < FIFO_count; i++) {
-					buf_data = *reg_data;
-					chn_ID = (buf_data >> 16) & 0xF;
-					chn_ptr = &ADCTSC.channel[chn_ID];
 
-					if ((chn_ptr->buffer_size > chn_ptr->buffer_count)
-							&& (fetch_size > chn_ptr->buffer_count)) {
-						*(chn_ptr->buffer_save_ptr) = buf_data & 0xFFF;
-						chn_ptr->buffer_save_ptr++;
-						chn_ptr->buffer_count++;
-					} else {
-						ADCTSC.channel_en_var &= ~(1 << chn_ID); // SW Disable this channel 
-					}
+			// Fetch data from FIFO.
+			for (i = 0; i < FIFO_count; i++)
+			{
+				// Get the data from the ADC mapped memory.
+				// Through some sort of black magic, the next execution of this line will read
+				// the next value in the FIFO.
+				buf_data = *reg_data;
+
+				// Get the channel Id from the buffer data, and
+				// get the pointer to the ADC channel struct.
+				chn_ID = (buf_data >> 16) & 0xF;
+				chn_ptr = &ADCTSC.channel[chn_ID];
+
+				if ((chn_ptr->buffer_size > chn_ptr->buffer_count)
+						&& (fetch_size > chn_ptr->buffer_count))
+				{
+					*(chn_ptr->buffer_save_ptr) = buf_data & 0xFFF;
+					chn_ptr->buffer_save_ptr++;
+					chn_ptr->buffer_count++;
+				} else {
+					ADCTSC.channel_en_var &= ~(1 << chn_ID); // SW Disable this channel 
 				}
-//				tv.tv_sec = 0;
-//				tv.tv_usec = 40;
-//				select(0, NULL, NULL, NULL, &tv);
 			}
 			// switch to next FIFO 
 			FIFO_ptr = FIFO_ptr->next;
 		}
 	}
 
-	/* all sample finish */
+	/* 4. All sample finish. */
 	for (chn_ID = 0; chn_ID < ADCTSC_AIN_COUNT; chn_ID++) {
 		//printf("waiting3\n");
 		if (ADCTSC.channel_en & (1 << chn_ID)) {
@@ -490,6 +509,7 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 		}
 	}
 
+	/* 6. Disable the control tag. */
 	reg_ctrl = (void *) adctsc_ptr + ADCTSC_CTRL;
 	*reg_ctrl &= ~(CTRL_ENABLE | CTRL_STEP_ID_TAG);
 
