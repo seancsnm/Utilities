@@ -32,6 +32,11 @@
  * I don't really understant what is happening here;
  * suggest using BBBIO_ADC_WORK_MODE_BUSY_POLLING instead. */
 #define BBBIO_ADC_WORK_MODE_TIMER_INT	0x2
+/** HW clock speed of the ADC unit. 24MHz.
+ *  On older BeagleBones this was much slower (3MHz). */
+#define BBBIO_ADC_CLOCK 24000000
+/** HW clock speed of the BeagleBone CPU. 1GHz. */
+#define BBBIO_CPU_CLOCK 1000000000
 
 /* many of the following have their comments in the code */
 /* ------------------------------------------------------------------------- */

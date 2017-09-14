@@ -227,6 +227,7 @@ void BBBIO_ADCTSC_module_ctrl(unsigned int work_type, unsigned int clkdiv) {
 	} else {
 		reg = (void *) adctsc_ptr + ADCTSC_ADC_CLKDIV;
 		*reg = (clkdiv - 1);
+		ADCTSC.ClockDiv = clkdiv;
 	}
 
 	if ((work_type == BBBIO_ADC_WORK_MODE_BUSY_POLLING)
@@ -330,47 +331,73 @@ int BBBIO_ADCTSC_channel_ctrl(unsigned int chn_ID, int mode, int open_dly,
 
 	return 1;
 }
+
 /* ----------------------------------------------------------------------------------------------- */
-/* signal function for BBBIO_ADCTSC_work (sig SIGALRM)
+/**
+ * Read all values from all ADC FIFO buffers.
  *
+ * We read from all of the buffers, instead of just one buffer, because:
+ * a) it guarantees the cache is cleared the next time we want to read data
+ * b) that makes using this function simpler
  */
-static void _ADCTSC_work(int sig_arg) {
+static void ADCTSC_readValues()
+{
+	struct ADCTSC_channel_struct *chn_ptr = NULL;
+	struct ADCTSC_FIFO_struct *FIFO_ptr = ADCTSC.FIFO;
 	unsigned int *reg_count = NULL;
 	unsigned int *reg_data = NULL;
 	unsigned int buf_data = 0;
 	int FIFO_count = 0;
 	int chn_ID = 0;
-	struct ADCTSC_channel_struct *chn_ptr = NULL;
-	struct ADCTSC_FIFO_struct *FIFO_ptr = ADCTSC.FIFO;
 	int i, j;
+	int desiredReadsAvailable, bufferSpaceAvailable;
 
-	/* waiting FIFO buffer fetch a data*/
-	for (j = 0; j < 2; j++) {
+	// Loop through all FIFO buffers
+	for (j = 0; j < 2; j++)
+	{
 		reg_count = FIFO_ptr->reg_count;
 		reg_data = FIFO_ptr->reg_data;
 
+		// Get the count of available words in the ADC FIFO buffer (up to 64).
+		// I think this might be reset when we turn all channels off.
 		FIFO_count = *reg_count;
-		if (FIFO_count > 0) {
-			/* fetch data from FIFO */
-			for (i = 0; i < FIFO_count; i++) {
-				buf_data = *reg_data;
-				chn_ID = (buf_data >> 16) & 0xF;
-				chn_ptr = &ADCTSC.channel[chn_ID];
 
-				if ((chn_ptr->buffer_size > chn_ptr->buffer_count)
-						&& (ADCTSC.fetch_size > chn_ptr->buffer_count)) {
-					*(chn_ptr->buffer_save_ptr) = buf_data & 0xFFF;
-					chn_ptr->buffer_save_ptr++;
-					chn_ptr->buffer_count++;
-				} else {
-					ADCTSC.channel_en_var &= ~(1 << chn_ID); /* SW Disable this channel */
-					/* No break here , still work for clear fifo */
-				}
+		// Fetch data from FIFO.
+		for (i = 0; i < FIFO_count; i++)
+		{
+			// Get the data from the ADC mapped memory.
+			// I believe there is a mutex for the ADC FIFO buffer, such that
+			// the next execution of this line will read a different value from the FIFO.
+			buf_data = *reg_data;
+
+			// Get the channel Id from the buffer data, and
+			// get the pointer to the ADC channel struct.
+			// We know which channel has been sampled because we set the CTRL_STEP_ID_TAG
+			// bit, which store the channel label in the FIFO buffers along with the data.
+			chn_ID = (buf_data >> 16) & 0xF;
+			chn_ptr = &ADCTSC.channel[chn_ID];
+
+			bufferSpaceAvailable = (chn_ptr->buffer_size > chn_ptr->buffer_count);
+			desiredReadsAvailable = (ADCTSC.fetch_size > chn_ptr->buffer_count);
+			if (desiredReadsAvailable && bufferSpaceAvailable)
+			{
+				*(chn_ptr->buffer_save_ptr) = buf_data & 0xFFF;
+				chn_ptr->buffer_save_ptr++; // increment to next spot in buffer
+				chn_ptr->buffer_count++; // increment used buffer size
+			} else {
+				ADCTSC.channel_en_var &= ~(1 << chn_ID); // SW Disable this channel 
 			}
 		}
-		/* switch to next FIFO */
+
+		// switch to next FIFO to read all values from the ADC cache
 		FIFO_ptr = FIFO_ptr->next;
 	}
+}
+/* signal function for BBBIO_ADCTSC_work while in TIMER mode (sig SIGALRM)
+ *
+ */
+static void _ADCTSC_work(int sig_arg) {
+	ADCTSC_readValues();
 }
 /* ----------------------------------------------------------------------------------------------- */
 /* ADCTSC fetch data
@@ -380,16 +407,8 @@ static void _ADCTSC_work(int sig_arg) {
  *
  */
 unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
-	unsigned int *reg_count = NULL;
-	unsigned int *reg_data = NULL;
 	unsigned int *reg_ctrl = NULL;
-	unsigned int buf_data = 0;
-	int FIFO_count = 0;
 	int chn_ID = 0;
-	struct ADCTSC_channel_struct *chn_ptr = NULL;
-	struct ADCTSC_FIFO_struct *FIFO_ptr = ADCTSC.FIFO;
-	int i;
-//	unsigned int tmp_channel_en = ADCTSC.channel_en;
 
 	/* 1. Start sampling. This enables the channels; the ADC unit should start "immediately" afterwards. */
 	for (chn_ID = 0; chn_ID < ADCTSC_AIN_COUNT; chn_ID++) {
@@ -407,13 +426,21 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 	ADCTSC.fetch_size = fetch_size;
 	ADCTSC.channel_en_var = ADCTSC.channel_en;
 
-	if (ADCTSC.work_mode & BBBIO_ADC_WORK_MODE_TIMER_INT) {
-		struct itimerval ADC_t;
-		ADC_t.it_interval.tv_usec = 200;
-		ADC_t.it_interval.tv_sec = 0;
-		ADC_t.it_value.tv_usec = 200;
-		ADC_t.it_value.tv_sec = 0;
+	/* 3. Retrieve values from the ADC! */
+	if (ADCTSC.work_mode & BBBIO_ADC_WORK_MODE_TIMER_INT) { /* Timed Wait mode */
+		/* Wait some amount of time (determined by known clock speeds)
+		 * before looking for values from the ADC in the _ADCTSC_work function.
+		 * If all desired values aren't available by that time,
+		 * delay another 100 microseconds and try again.    
+		 */
 
+		int clkdivMultiplier = ADCTSC.ClockDiv + 1; // add 1 just for good luck
+		int delayTime = BBBIO_CPU_CLOCK * clkdivMultiplier / BBBIO_ADC_CLOCK;
+		struct itimerval ADC_t;
+		ADC_t.it_interval.tv_usec = delayTime;
+		ADC_t.it_interval.tv_sec = 0;
+		ADC_t.it_value.tv_usec = delayTime;
+		ADC_t.it_value.tv_sec = 0;
 		signal(SIGALRM, _ADCTSC_work);
 		if (setitimer(ITIMER_REAL, &ADC_t, NULL) < 0) {
 			printf("setitimer error\n");
@@ -422,8 +449,7 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 
 		// wait for the timed loop to do its work
 		while (ADCTSC.channel_en_var != 0) {
-			//printf("waiting1\n");
-			usleep(10000);
+			usleep(100);
 		}
 
 		ADC_t.it_interval.tv_usec = 0;
@@ -439,33 +465,7 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 		 * for all values in the buffers.
 		 */
 		while (ADCTSC.channel_en_var != 0) {
-			//printf("waiting2\n");
-			reg_count = FIFO_ptr->reg_count;
-			reg_data = FIFO_ptr->reg_data;
-
-			FIFO_count = *reg_count;
-			if (FIFO_count > 0) {
-				/* fetch data from FIFO */
-				for (i = 0; i < FIFO_count; i++) {
-					buf_data = *reg_data;
-					chn_ID = (buf_data >> 16) & 0xF;
-					chn_ptr = &ADCTSC.channel[chn_ID];
-
-					if ((chn_ptr->buffer_size > chn_ptr->buffer_count)
-							&& (fetch_size > chn_ptr->buffer_count)) {
-						*(chn_ptr->buffer_save_ptr) = buf_data & 0xFFF;
-						chn_ptr->buffer_save_ptr++;
-						chn_ptr->buffer_count++;
-					} else {
-						ADCTSC.channel_en_var &= ~(1 << chn_ID); // SW Disable this channel 
-					}
-				}
-//				tv.tv_sec = 0;
-//				tv.tv_usec = 40;
-//				select(0, NULL, NULL, NULL, &tv);
-			}
-			// switch to next FIFO 
-			FIFO_ptr = FIFO_ptr->next;
+			ADCTSC_readValues();
 		}
 	}
 
