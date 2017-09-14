@@ -351,13 +351,13 @@ int BBBIO_ADCTSC_channel_ctrl(unsigned int chn_ID, int mode, int open_dly,
 
 /* ----------------------------------------------------------------------------------------------- */
 /**
- * Read all values from all ADC FIFO buffers.
+ * Read all values from all ADC FIFO buffers. To be used internally by BBBIO_ADCTSC_work and _BBBIO_ADCTSC_work.
  *
  * We read from all of the buffers, instead of just one buffer, because:
  * a) it guarantees the cache is cleared the next time we want to read data
  * b) that makes using this function simpler
  */
-static void ADCTSC_readValues()
+static void _ADCTSC_readValues()
 {
 	struct ADCTSC_channel_struct *chn_ptr = NULL;
 	struct ADCTSC_FIFO_struct *FIFO_ptr = ADCTSC.FIFO;
@@ -414,7 +414,7 @@ static void ADCTSC_readValues()
  *
  */
 static void _ADCTSC_work(int sig_arg) {
-	ADCTSC_readValues();
+	_ADCTSC_readValues();
 }
 /* ----------------------------------------------------------------------------------------------- */
 /* ADCTSC fetch data
@@ -482,7 +482,7 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 		 * for all values in the buffers.
 		 */
 		while (ADCTSC.channel_en_var != 0) {
-			ADCTSC_readValues();
+			_ADCTSC_readValues();
 		}
 	}
 
