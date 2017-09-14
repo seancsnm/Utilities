@@ -3,6 +3,8 @@
  *
  * support "Single Channel Single Step" ADC sample control  ,  not support Interrupt yet ,
  *
+ * Suggested reading is http://www.ti.com/lit/ug/spruh73p/spruh73p.pdf
+ * (that link goes to the AM335x ARM Cortex-A8 Microprocessors Technical Reference Manual, chapter 12)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,7 +97,7 @@
 
 /* CTRL operator code */
 #define CTRL_ENABLE	0x1
-#define CTRL_STEP_ID_TAG	0x2
+#define CTRL_STEP_ID_TAG	0x2 // pretty sure this sets the bit to store the channel ID tag with the data in the FIFO buffers
 
 /* ----------------------------------------------------------------------------------------------- */
 /* struct definition */
@@ -267,9 +269,9 @@ int BBBIO_ADCTSC_channel_buffering(unsigned int chn_ID, unsigned int *buf,
  *
  *	@param chn_ID : channel ID which need configure. (BBBIO_AIN0 ~ BBBIO_AIN6)
  *	@param mode : sample mode ,one-shot or continus. (SW mode only , HW synchronized not implement)
- *	@param open_dly : open delay ,default :0 , max :262143 .
- *	@param sample_dly : sample delat , default :1 , max :255 .
- *	@ param sample_avg : Number of samplings to average. (BBBIO_ADC_STEP_AVG BBBIO_ADC_STEP_AVG_1, 2, 4, 8, 16)
+ *	@param open_dly : open delay ADC clock cycles between hardware starts and sample delay, default :0, max :262143.
+ *	@param sample_dly : sample delay ADC clock cycles between end of open delay and beggining of ADC reads, and between sampled reads, default :1, max :255.
+ *	@ param sample_avg : Number of samplings to average. The indicated number of samples are taken immediately and averaged before cycling to the next input. (BBBIO_ADC_STEP_AVG BBBIO_ADC_STEP_AVG_1, 2, 4, 8, 16)
  *	@param buf : buffer for store data.
  *	@param buf_size : buffer size.
  *
@@ -389,7 +391,7 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 	int i;
 //	unsigned int tmp_channel_en = ADCTSC.channel_en;
 
-	/* Start sample */
+	/* 1. Start sampling. This enables the channels; the ADC unit should start "immediately" afterwards. */
 	for (chn_ID = 0; chn_ID < ADCTSC_AIN_COUNT; chn_ID++) {
 		if (ADCTSC.channel_en & (1 << chn_ID)) {
 			ADCTSC.channel[chn_ID].buffer_save_ptr =
@@ -398,7 +400,7 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 		}
 	}
 
-	/* Enable module and tag channel ID in FIFO data*/
+	/* 2. Enable module and tag channel ID in FIFO data*/
 	reg_ctrl = (void *) adctsc_ptr + ADCTSC_CTRL;
 	*reg_ctrl |= (CTRL_ENABLE | CTRL_STEP_ID_TAG);
 
@@ -417,10 +419,13 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 			printf("setitimer error\n");
 			return 0;
 		}
+
+		// wait for the timed loop to do its work
 		while (ADCTSC.channel_en_var != 0) {
 			//printf("waiting1\n");
 			usleep(10000);
 		}
+
 		ADC_t.it_interval.tv_usec = 0;
 		ADC_t.it_interval.tv_sec = 0;
 		ADC_t.it_value.tv_usec = 0;
@@ -428,7 +433,11 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 		setitimer(ITIMER_REAL, &ADC_t, NULL);
 		signal(SIGALRM, NULL);
 	} else { /* Busy Polling mode */
-		/* waiting FIFO buffer fetch a data */
+		/**
+		 * Busy wait on the ADC to finish converting all enabled inputs.
+		 * While not all inputs have been sampled, read either of the FIFO buffers
+		 * for all values in the buffers.
+		 */
 		while (ADCTSC.channel_en_var != 0) {
 			//printf("waiting2\n");
 			reg_count = FIFO_ptr->reg_count;
@@ -460,14 +469,14 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 		}
 	}
 
-	/* all sample finish */
+	/* 4. All sample finish. */
 	for (chn_ID = 0; chn_ID < ADCTSC_AIN_COUNT; chn_ID++) {
-		//printf("waiting3\n");
 		if (ADCTSC.channel_en & (1 << chn_ID)) {
 			BBBIO_ADCTSC_channel_disable(chn_ID);
 		}
 	}
 
+	/* 5. Disable the control tag. */
 	reg_ctrl = (void *) adctsc_ptr + ADCTSC_CTRL;
 	*reg_ctrl &= ~(CTRL_ENABLE | CTRL_STEP_ID_TAG);
 
