@@ -3,3 +3,14 @@
 *.c#
 *.so
 
+# Eclipse files
+.project
+.cproject
+*.rexpfd
+.settings*
+
+# visual studio project files
+*.vs
+*.VC.*
+*.sln
+*.vcxproj*
