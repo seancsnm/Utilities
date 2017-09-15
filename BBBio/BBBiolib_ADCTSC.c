@@ -376,8 +376,10 @@ static void _ADCTSC_readSingleValue(unsigned int *reg_data)
 		*(chn_ptr->buffer_save_ptr) = buf_data & 0xFFF;
 		chn_ptr->buffer_save_ptr++; // increment to next spot in buffer
 		chn_ptr->buffer_count++; // increment used buffer size
+		bufferSpaceAvailable = (chn_ptr->buffer_size > chn_ptr->buffer_count);
+		desiredReadsAvailable = (ADCTSC.fetch_size > chn_ptr->buffer_count);
 	}
-	else
+	if (!desiredReadsAvailable || !bufferSpaceAvailable)
 	{
 		ADCTSC.channel_en_var &= ~(1 << chn_ID); // SW Disable this channel 
 	}
