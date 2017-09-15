@@ -26,11 +26,11 @@
 #define BBBIO_ADC_STEP_AVG_16	0x4
 
 /** These are used to se the work mode with BBBIO_ADCTSC_module_ctrl(...) */
-/* Blocks program execution until the ADCs have been read. */
+/* Blocks program execution until the ADCs have been read.
+ * Suggested usage is with a clock divider of 1 (maybe 2) in BBBIO_ADCTSC_module_ctrl. */
 #define BBBIO_ADC_WORK_MODE_BUSY_POLLING	0x1
 /* Read the ADCs on a timer interrupt.
- * I don't really understant what is happening here;
- * suggest using BBBIO_ADC_WORK_MODE_BUSY_POLLING instead. */
+ * Use this mode if you are having trouble reading from the ADC (seems to be freezing). */
 #define BBBIO_ADC_WORK_MODE_TIMER_INT	0x2
 /** HW clock speed of the ADC unit. 24MHz.
  *  On older BeagleBones this was much slower (3MHz). */

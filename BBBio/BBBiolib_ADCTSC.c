@@ -350,24 +350,52 @@ int BBBIO_ADCTSC_channel_ctrl(unsigned int chn_ID, int mode, int open_dly,
 }
 
 /* ----------------------------------------------------------------------------------------------- */
+static void _ADCTSC_readSingleValue(unsigned int *reg_data)
+{
+	struct ADCTSC_channel_struct *chn_ptr = NULL;
+	unsigned int buf_data = 0;
+	int chn_ID = 0;
+	int desiredReadsAvailable, bufferSpaceAvailable;
+
+	// Get the data from the ADC mapped memory.
+	// I believe there is a mutex for the ADC FIFO buffer, such that
+	// the next execution of this line will read a different value from the FIFO.
+	buf_data = *reg_data;
+
+	// Get the channel Id from the buffer data, and
+	// get the pointer to the ADC channel struct.
+	// We know which channel has been sampled because we set the CTRL_STEP_ID_TAG
+	// bit, which store the channel label in the FIFO buffers along with the data.
+	chn_ID = (buf_data >> 16) & 0xF;
+	chn_ptr = &ADCTSC.channel[chn_ID];
+
+	bufferSpaceAvailable = (chn_ptr->buffer_size > chn_ptr->buffer_count);
+	desiredReadsAvailable = (ADCTSC.fetch_size > chn_ptr->buffer_count);
+	if (desiredReadsAvailable && bufferSpaceAvailable)
+	{
+		*(chn_ptr->buffer_save_ptr) = buf_data & 0xFFF;
+		chn_ptr->buffer_save_ptr++; // increment to next spot in buffer
+		chn_ptr->buffer_count++; // increment used buffer size
+	}
+	else
+	{
+		ADCTSC.channel_en_var &= ~(1 << chn_ID); // SW Disable this channel 
+	}
+}
 /**
- * Read all values from all ADC FIFO buffers. To be used internally by BBBIO_ADCTSC_work and _BBBIO_ADCTSC_work.
+ * Read all values from all ADC FIFO buffers. To be used internally by BBBIO_ADCTSC_work.
  *
  * We read from all of the buffers, instead of just one buffer, because:
  * a) it guarantees the cache is cleared the next time we want to read data
  * b) that makes using this function simpler
  */
-static void _ADCTSC_readValues()
+static void _ADCTSC_readAllValues()
 {
-	struct ADCTSC_channel_struct *chn_ptr = NULL;
 	struct ADCTSC_FIFO_struct *FIFO_ptr = ADCTSC.FIFO;
 	unsigned int *reg_count = NULL;
 	unsigned int *reg_data = NULL;
-	unsigned int buf_data = 0;
 	int FIFO_count = 0;
-	int chn_ID = 0;
 	int i, j;
-	int desiredReadsAvailable, bufferSpaceAvailable;
 
 	// Loop through all FIFO buffers
 	for (j = 0; j < 2; j++)
@@ -382,39 +410,59 @@ static void _ADCTSC_readValues()
 		// Fetch data from FIFO.
 		for (i = 0; i < FIFO_count; i++)
 		{
-			// Get the data from the ADC mapped memory.
-			// I believe there is a mutex for the ADC FIFO buffer, such that
-			// the next execution of this line will read a different value from the FIFO.
-			buf_data = *reg_data;
-
-			// Get the channel Id from the buffer data, and
-			// get the pointer to the ADC channel struct.
-			// We know which channel has been sampled because we set the CTRL_STEP_ID_TAG
-			// bit, which store the channel label in the FIFO buffers along with the data.
-			chn_ID = (buf_data >> 16) & 0xF;
-			chn_ptr = &ADCTSC.channel[chn_ID];
-
-			bufferSpaceAvailable = (chn_ptr->buffer_size > chn_ptr->buffer_count);
-			desiredReadsAvailable = (ADCTSC.fetch_size > chn_ptr->buffer_count);
-			if (desiredReadsAvailable && bufferSpaceAvailable)
-			{
-				*(chn_ptr->buffer_save_ptr) = buf_data & 0xFFF;
-				chn_ptr->buffer_save_ptr++; // increment to next spot in buffer
-				chn_ptr->buffer_count++; // increment used buffer size
-			} else {
-				ADCTSC.channel_en_var &= ~(1 << chn_ID); // SW Disable this channel 
-			}
+			_ADCTSC_readSingleValue(reg_data);
 		}
 
 		// switch to next FIFO to read all values from the ADC cache
 		FIFO_ptr = FIFO_ptr->next;
 	}
 }
-/* signal function for BBBIO_ADCTSC_work while in TIMER mode (sig SIGALRM)
+/**
+ * Signal function for BBBIO_ADCTSC_work while in TIMER mode (sig SIGALRM).
  *
+ * Performs only one operation against the ADC unit every time it is called. This is avoid what I
+ * believe is a bug with the ADC unit which causes the unit to hang if accessed more than once per
+ * cycle.
  */
+static struct ADCTSC_FIFO_struct *_ADCTSC_work_FIFO_current = NULL;
+static unsigned int _ADCTSC_work_FIFO_count = 0;
+static unsigned int _ADCTSC_work_callsSinceLastCountCheck = 0;
 static void _ADCTSC_work(int sig_arg) {
-	_ADCTSC_readValues();
+	unsigned int *reg_count = NULL;
+	unsigned int *reg_data = NULL;
+
+	// Loop through all FIFO buffers
+	if (_ADCTSC_work_FIFO_count == 0)
+	{
+		// The ADC unit seems to be especially sensitive to multiple reads in a row to its
+		// "count" register. Check to make sure we aren't making calls to the count register
+		// too often.
+		if (_ADCTSC_work_callsSinceLastCountCheck < 3)
+		{
+			_ADCTSC_work_callsSinceLastCountCheck++;
+			return;
+		}
+		if (_ADCTSC_work_FIFO_current == NULL)
+		{
+			_ADCTSC_work_FIFO_current = ADCTSC.FIFO;
+		}
+
+		// switch to next FIFO to read all values from its ADC cache
+		_ADCTSC_work_FIFO_current = _ADCTSC_work_FIFO_current->next;
+
+		// Get the count of available words in the ADC FIFO buffer (up to 64).
+		// I think this might be reset when we turn all channels off.
+		reg_count = _ADCTSC_work_FIFO_current->reg_count;
+		_ADCTSC_work_FIFO_count = *reg_count;
+		_ADCTSC_work_callsSinceLastCountCheck = 0;
+	}
+	else
+	{
+		reg_data = _ADCTSC_work_FIFO_current->reg_data;
+		_ADCTSC_readSingleValue(reg_data);
+		_ADCTSC_work_FIFO_count--;
+		_ADCTSC_work_callsSinceLastCountCheck++;
+	}
 }
 /* ----------------------------------------------------------------------------------------------- */
 /* ADCTSC fetch data
@@ -482,7 +530,7 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 		 * for all values in the buffers.
 		 */
 		while (ADCTSC.channel_en_var != 0) {
-			_ADCTSC_readValues();
+			_ADCTSC_readAllValues();
 		}
 	}
 
