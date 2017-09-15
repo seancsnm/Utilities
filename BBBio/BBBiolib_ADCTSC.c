@@ -451,8 +451,8 @@ unsigned int BBBIO_ADCTSC_work(unsigned int fetch_size) {
 		 * delay another 100 microseconds and try again.    
 		 */
 
-		int clkdivMultiplier = ADCTSC.ClockDiv + 1; // add 1 just for good luck
-		int delayTime = BBBIO_CPU_CLOCK * clkdivMultiplier / BBBIO_ADC_CLOCK;
+		long long clkdivMultiplier = ADCTSC.ClockDiv + 1; // add 1 just for good luck
+		long delayTime = (long) ( (long long) BBBIO_CPU_CLOCK * clkdivMultiplier / (long long) BBBIO_ADC_CLOCK );
 		struct itimerval ADC_t;
 		ADC_t.it_interval.tv_usec = delayTime;
 		ADC_t.it_interval.tv_sec = 0;
